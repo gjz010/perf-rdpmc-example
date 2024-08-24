@@ -42,4 +42,7 @@ Modif-04 : 0x04 : PMU : [c] : counter-mask in range [0-255] (integer)
 Modif-05 : 0x07 : PMU : [intx] : monitor only inside transactional memory region (boolean)
 Modif-06 : 0x08 : PMU : [intxcp] : do not count occurrences inside aborted transactional memory region (boolean)
 ```
-4. Run `./test_rdpmc`.
+4. Run `./test_rdpmc`, or:
+```
+perf stat -e l2_request.all ./test_rdpmc
+```

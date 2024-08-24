@@ -181,6 +181,7 @@ int main(){
     }else{
         printf("cap_user_rdpmc is BROKEN!\n");
     }
+    long long tot = 0;
     for(int i=0; i<10; i++){
         l2_request_references.reset();
         long long cntr_start = l2_request_references.read_count_rdpmc();
@@ -192,7 +193,9 @@ int main(){
 
         printf("Count: %lld\n", l2_request_references.read_count());
         printf("Count rdpmc: %lld (from %lld to %lld)\n", cntr_end-cntr_start, cntr_start, cntr_end);
+        tot += cntr_end - cntr_start;
     }
+    printf("Total = %lld\n", tot);
 
 
     //attr[0].config 
