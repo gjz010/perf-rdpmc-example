@@ -8,15 +8,16 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static long
+int
 perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
                 int cpu, int group_fd, unsigned long flags)
 {
-    int ret;
+    long int ret;
 
     ret = syscall(SYS_perf_event_open, hw_event, pid, cpu,
                     group_fd, flags);
-    return ret;
+    assert(ret>=0);
+    return (int) ret;
 }
 
 int
@@ -42,12 +43,10 @@ main(void)
 
     ioctl(fd, PERF_EVENT_IOC_RESET, 0);
     ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
-
-    for(int i=0; i<100; i++){
-        printf("Measuring instruction count for this printf\n");
-    }
+    
+    printf("Measuring instruction count for this printf\n");
     ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
-    int result = read(fd, &count, sizeof(count));
+    size_t result = read(fd, &count, sizeof(count));
     assert(result == sizeof(count));
     printf("Used %lld instructions\n", count);
 

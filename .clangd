@@ -2,7 +2,7 @@ If:
   PathMatch: .*\.cpp
 
 CompileFlags:
-  Add: [-std=c++20]
+  Add: [-Wall -Werror -pedantic -Wextra -Wconversion -O3 -std=c++20]
 
 ---
 
@@ -10,4 +10,4 @@ If:
   PathMatch: .*\.c
 
 CompileFlags:
-  Add: [-std=c17]
+  Add: [-Wall -Werror -pedantic -Wextra -Wconversion -O3 -std=c17]

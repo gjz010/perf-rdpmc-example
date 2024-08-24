@@ -46,3 +46,8 @@ Modif-06 : 0x08 : PMU : [intxcp] : do not count occurrences inside aborted trans
 ```
 perf stat -e l2_request.all ./test_rdpmc
 ```
+
+## Known Issues
+
+1. `read_count_rdpmc()` occasionally returns 0.
+2. No multiplexing is considered.
