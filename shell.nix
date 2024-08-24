@@ -1,7 +1,7 @@
 let pkgs = import <nixpkgs> {};in
 with pkgs;
 let libpfm_latest = libpfm.overrideAttrs (final: prev: {
-    version = "4.13.0-dirty";
+    version = "4.13.0-master";
     src = fetchgit {
         url = "git://git.code.sf.net/p/perfmon2/libpfm4";
         rev = "874ed7cff57271c5d4e530650eadce76e3dcaa14";
