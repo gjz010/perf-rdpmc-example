@@ -3,6 +3,7 @@
 #include <cstring>
 #include <linux/perf_event.h>
 #include <linux/hw_breakpoint.h>
+#include <optional>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -46,6 +47,7 @@ int perf_event_open(struct perf_event_attr *hw_event, pid_t pid, int cpu, int gr
 #include <cpuid.h>
 #define rmb() asm volatile("" ::: "memory")
 #define rdpmc(x) __rdpmc(x)
+#define rdtsc() __rdtsc()
 
 // https://w0.hatenablog.com/entry/20140307/1394139628
 #define barrier() do{rmb();\
@@ -57,6 +59,8 @@ static inline T atomic_load(T* t)
     auto t_v = static_cast<volatile T*>(t);
     return __atomic_load_n(t_v, __ATOMIC_RELAXED);
 }
+using u32 = uint32_t;
+using u64 = uint64_t;
 struct LibPFM{
     LibPFM(){
         int ret = pfm_initialize();
@@ -77,6 +81,13 @@ struct LibPFM{
     }
 };
 
+struct PerfResult{
+    u64 count;
+    u64 enabled;
+    u64 running;
+    PerfResult(u64 count, u64 enabled, u64 running):
+        count(count), enabled(enabled), running(running){}
+};
 struct PerfEvent{
     int fd;
     perf_event_mmap_page* header;
@@ -109,18 +120,10 @@ struct PerfEvent{
         assert(fd>=0);
         size_t n = 4;
         mapped_len = (((size_t)1)+(1<<n)) * PAGE_SIZE;
-        base = mmap(NULL, mapped_len, PROT_WRITE, MAP_SHARED, fd, 0);
+        base = mmap(NULL, mapped_len, PROT_READ, MAP_SHARED, fd, 0);
         assert(base!=MAP_FAILED);
         header = (perf_event_mmap_page*)base;
         data = (char*)base + header->data_offset;
-        /*
-        header->aux_offset = header->data_offset + header->data_size;
-        header->aux_size   = (std::pow(2, m)) * PAGE_SIZE;
-        
-        aux = mmap(NULL, header->aux_size, PROT_READ, MAP_SHARED, fd,
-               header->aux_offset);
-        assert(aux!=MAP_FAILED);
-        */
     }
     void reset(){
         ioctl(fd, PERF_EVENT_IOC_RESET, 0);
@@ -137,48 +140,71 @@ struct PerfEvent{
         barrier();
 
     }
-    long long read_count(){
+    PerfResult read_count(){
         assert(fd>=0);
-        using u64 = uint64_t;
         std::array<u64, 5> readout = {};
         auto result = read(fd, &readout, sizeof(readout));
         assert(result==sizeof(readout));
         //printf("readout: %ld %ld %ld %ld %ld\n", readout[0], readout[1], readout[2], readout[3], readout[4]);
-        return readout[0];
+        return PerfResult(readout[0], readout[1], readout[2]);
     }
     bool cap_user_rdpmc(){
         return header->cap_user_rdpmc;
     }
-    long long read_count_rdpmc(){
+    bool cap_user_time(){
+        return header->cap_user_time;
+    }
+    std::optional<PerfResult> read_count_rdpmc(){
         assert(cap_user_rdpmc());
+        assert(cap_user_time());
         // https://man7.org/linux/man-pages/man2/perf_event_open.2.html
-        using u32 = uint32_t;
-        using u64 = uint64_t;
         volatile perf_event_mmap_page* pc = header;
         u32 seq, idx;
         idx = pc->index;
         u64 offset = 0;
         u64 regval = 0;
         volatile u32* lock = &pc->lock;
-        //u64 enabled, running;
+        u64 enabled, running;
         //int spin = 0;
         do {
             //spin++;
             seq = atomic_load(lock);
             barrier();
-            //enabled = pc->time_enabled;
-            //running = pc->time_running;
+            enabled = pc->time_enabled;
+            running = pc->time_running;
+            /*
+            enabled = pc->time_enabled;
+            do{
+                auto cyc = rdtsc();
+                auto time_offset = pc->time_offset;
+                auto time_mult   = pc->time_mult;
+                auto time_shift  = pc->time_shift;
+                u64 quot, rem;
+                u64 delta;
+
+                quot  = cyc >> time_shift;
+                rem   = cyc & (((u64)1 << time_shift) - 1);
+                delta = time_offset + quot * time_mult +
+                        ((rem * time_mult) >> time_shift);
+            }while(0);
+            */
             idx = pc->index;
             offset = pc->offset;
             regval = 0;
+            auto pmc_width = pc->pmc_width;
             if(idx) {
                 regval = rdpmc(idx - 1);
+                regval <<= 64 - pmc_width;
+                regval >>= 64 - pmc_width; // signed shift right
+            }else{
+                return std::nullopt;
             }
             barrier();
         } while (atomic_load(lock)!= seq);
         //printf("Spinned %d (offset=%lu regval = %lu idx=%d)\n", seq, offset, regval, idx);
         //printf("Enabled=%ld running=%ld\n", enabled, running);
-        return offset + regval;
+        auto count = offset + regval;
+        return PerfResult(count, enabled, running);
     }
     ~PerfEvent(){
         int ret = munmap(base, mapped_len);
@@ -201,15 +227,24 @@ int main(){
     for(int i=0; i<10; i++){
         l2_request_references.reset();
         l2_request_references.enable();
-        long long cntr_start = l2_request_references.read_count_rdpmc();
+        auto cntr_start_val = l2_request_references.read_count_rdpmc();
         workload_matmul();
-        long long cntr_end = l2_request_references.read_count_rdpmc();
+        auto cntr_end_val = l2_request_references.read_count_rdpmc();
         l2_request_references.disable();
 
 
-        printf("Count: %lld\n", l2_request_references.read_count());
-        printf("Count rdpmc: %lld (from %lld to %lld)\n", cntr_end-cntr_start, cntr_start, cntr_end);
-        tot += cntr_end - cntr_start;
+        auto result = l2_request_references.read_count();
+        printf("Count from read(): %ld, running=%ld, enabled=%ld\n", result.count, result.running, result.enabled);
+        if(cntr_start_val.has_value() && cntr_end_val.has_value()){
+            auto& cntr_start = *cntr_start_val;
+            auto& cntr_end = *cntr_end_val;
+            printf("Count cntr_start: %ld, running=%ld, enabled=%ld\n", cntr_start.count, cntr_start.running, cntr_start.enabled);
+            printf("Count cntr_end: %ld, running=%ld, enabled=%ld\n", cntr_end.count, cntr_end.running, cntr_end.enabled);
+            printf("Count rdpmc: %ld\n", cntr_end.count-cntr_start.count);
+        }else{
+            printf("rdpmc() failed. This may happen on first access.\n");
+        }
+        tot += result.count;
     }
     printf("Total = %lld\n", tot);
 
